@@ -3,6 +3,7 @@ import { synthesize, type Voice } from "../lib/voices";
 export function createEngine() {
   let context: AudioContext | null = null;
   let destination: ((id: string) => AudioNode) | null = null;
+  let timbre = 0.5;
   const voices = new Map<string, Voice>();
   const held = new Map<string, string>();
   return {
@@ -22,8 +23,16 @@ export function createEngine() {
       for (const [id, v] of voices)
         if (v.end < context.currentTime) voices.delete(id);
       const id = crypto.randomUUID();
-      voices.set(id, synthesize(context, destination(note.trackId), note));
+      voices.set(id, synthesize(context, destination(note.trackId), note, timbre));
       if (key && note.instrument === "keys") held.set(key, id);
+    },
+    // Morph reaches held notes: every live keys voice re-tunes its timbre
+    // chain, and future attacks start from the same value.
+    setTimbre(value: number) {
+      timbre = value;
+      if (!context) return;
+      const at = context.currentTime;
+      for (const voice of voices.values()) voice.setTimbre?.(value, at);
     },
     release(key: string) {
       const id = held.get(key);

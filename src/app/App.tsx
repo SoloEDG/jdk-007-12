@@ -4,11 +4,28 @@ import { Pads, Keyboard } from "@/features/instruments";
 import { Timeline, TrackActions } from "@/features/arrangement";
 import { RecordControls, RecordingStatus } from "@/features/recorder";
 import { MixerPanel } from "@/features/mixer";
+import { MacroPad } from "@/features/macros";
 export function App() {
   const s = useStudio();
   if (!s) return <div className="loading">正在打开夜航工作室…</div>;
   const v = s.view(),
     locked = v.recorder.status !== "idle";
+  const macroState = Object.fromEntries(
+    v.arrangement.tracks.map((t) => [
+      t.id,
+      !v.macros.referenced[t.id]
+        ? ("none" as const)
+        : v.macros.control[t.id]?.volume && v.macros.control[t.id]?.mute
+          ? ("controlled" as const)
+          : ("detached" as const),
+    ]),
+  );
+  const timbreLabel =
+    v.macros.timbre < 0.34
+      ? "柔和三角波 / WARM TRIANGLE"
+      : v.macros.timbre < 0.67
+        ? "混合波形 / HYBRID BLEND"
+        : "明亮锯齿 / BRIGHT SAW";
   return (
     <div className="studio-shell">
       <aside className="rail">
@@ -102,9 +119,12 @@ export function App() {
             channels={v.mixer.channels}
             master={v.mixer.master}
             running={v.transport.running}
+            macro={macroState}
             volume={s.volume}
             mute={s.mute}
             setMaster={s.master}
+            reattach={s.reattachTrack}
+            faderRelease={s.faderRelease}
           />
           <section className="panel performance-panel">
             <div className="section-heading">
@@ -130,7 +150,7 @@ export function App() {
             <div className="instrument-label">
               <span>
                 {v.selected?.instrument === "keys"
-                  ? "柔和三角波 / WARM TRIANGLE"
+                  ? timbreLabel
                   : "经典合成鼓组 / ANALOG KIT"}
               </span>
               <span>鼠标 · 触控 · 键盘</span>
@@ -145,6 +165,21 @@ export function App() {
               absolute={v.transport.absolute}
             />
           </section>
+          <MacroPad
+            view={v.macros}
+            padDown={s.padDown}
+            padMove={s.padMove}
+            padUp={s.padUp}
+            capture={s.captureMacro}
+            clearSlot={s.clearMacro}
+            toggleRecord={s.toggleMacroRecord}
+            setAutomationEnabled={s.setAutomationEnabled}
+            clearAutomation={s.clearAutomation}
+            timbre={s.timbre}
+            timbreRelease={s.timbreRelease}
+            reattachAll={s.reattachAll}
+            setAutoReturn={s.setAutoReturn}
+          />
         </div>
         <footer>
           <span role="status">{v.message}</span>

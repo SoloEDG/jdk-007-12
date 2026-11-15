@@ -7,11 +7,40 @@ const note = (
 ): Note => ({ id: crypto.randomUUID(), pitch, beat, duration, velocity });
 export function demoSession(): Session {
   return {
-    version: 1,
+    version: 2,
     title: "凌晨两点 / After Hours",
     bpm: 108,
     beats: 16,
     master: 0.7,
+    timbre: 0.3,
+    macros: [
+      {
+        volumes: { rhythm: 0.8, chords: 0.55, lead: 0.55 },
+        mutes: { rhythm: false, chords: false, lead: false },
+        timbre: 0.3,
+      },
+      {
+        volumes: { rhythm: 0.9, chords: 0.2, lead: 0.15 },
+        mutes: { rhythm: false, chords: true, lead: true },
+        timbre: 0.15,
+      },
+      {
+        volumes: { rhythm: 0.25, chords: 0.7, lead: 0.5 },
+        mutes: { rhythm: true, chords: false, lead: false },
+        timbre: 0.55,
+      },
+      {
+        volumes: { rhythm: 0.5, chords: 0.4, lead: 0.85 },
+        mutes: { rhythm: false, chords: false, lead: false },
+        timbre: 0.9,
+      },
+    ],
+    automation: [
+      { beat: 0, x: 0, y: 0 },
+      { beat: 4, x: 1, y: 0 },
+      { beat: 8, x: 1, y: 1 },
+      { beat: 12, x: 0, y: 1 },
+    ],
     channels: {
       rhythm: { volume: 0.8, muted: false },
       chords: { volume: 0.55, muted: false },

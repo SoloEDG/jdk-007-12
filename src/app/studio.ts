@@ -8,13 +8,16 @@ import {
   loadSession,
 } from "@/features/arrangement";
 import { createMixer } from "@/features/mixer";
+import { createMacros } from "@/features/macros";
 import type { NoteInput, Instrument, Session } from "@/shared/types";
+const SLOT_NAMES = "ABCD";
 export function createStudio(notify: () => void) {
   const engine = createEngine(),
     transport = createTransport(),
     recorder = createRecorder(),
     arrangement = createArrangement(),
-    mixer = createMixer();
+    mixer = createMixer(),
+    macros = createMacros();
   const active = new Set<string>();
   let message = "欢迎来到夜航。戴上耳机，试着敲下第一拍。",
     epoch = 0,
@@ -34,11 +37,38 @@ export function createStudio(notify: () => void) {
       );
     }
   };
-  const syncMixer = () =>
-    mixer.ensure(arrangement.snapshot().tracks.map((t) => t.id));
+  const syncMixer = () => mixer.ensure(arrangement.ids());
   const cancelVoices = () => {
     engine.cancel();
     active.clear();
+  };
+  // Push the morphed state into the same sound chain the performer hears:
+  // mixer buses for volume/mute, live voices for timbre. Parameters the
+  // performer has pulled out of macro control are skipped here.
+  const applyMorph = (glide = 0.03) => {
+    const t = transport.view(now());
+    const pos = macros.effectivePosition(
+      t.running,
+      !t.running && t.absolute > 0,
+      t.position,
+    );
+    const eff = macros.compute(arrangement.ids(), pos);
+    for (const id of arrangement.ids()) {
+      const c = eff.channels[id];
+      if (!c) continue;
+      const patch: { volume?: number; muted?: boolean } = {};
+      if (c.control.volume) patch.volume = c.volume;
+      if (c.control.mute) patch.muted = c.muted;
+      if (patch.volume !== undefined || patch.muted !== undefined)
+        mixer.setChannel(id, patch, glide);
+    }
+    engine.setTimbre(eff.timbre);
+  };
+  const recordMacroPoint = () => {
+    const t = transport.view(now());
+    if (!macros.isRecording() || !t.running) return;
+    const p = macros.position();
+    macros.recordPoint(t.position, p.x, p.y);
   };
   const stop = () => {
     epoch++;
@@ -74,6 +104,7 @@ export function createStudio(notify: () => void) {
     }
   };
   const tick = () => {
+    applyMorph();
     const time = now(),
       view = transport.view(time);
     const take = recorder.advance(view.absolute);
@@ -138,6 +169,8 @@ export function createStudio(notify: () => void) {
     const valid = arrangement.restore(session);
     transport.configure(valid.bpm, valid.beats);
     mixer.restore(valid.channels, valid.master);
+    macros.restore(valid.macros, valid.automation, valid.timbre, valid.beats);
+    applyMorph(0.01);
     notify();
   };
   const timer = window.setInterval(() => {
@@ -163,14 +196,36 @@ export function createStudio(notify: () => void) {
   window.addEventListener("blur", blur);
   return {
     view() {
+      const a = arrangement.snapshot(),
+        ids = a.tracks.map((t) => t.id),
+        morph = macros.last();
       return {
         transport: transport.view(now()),
-        arrangement: arrangement.snapshot(),
+        arrangement: a,
         selected: arrangement.selected(),
         recorder: recorder.snapshot(),
         mixer: mixer.snapshot(),
         active: new Set(active),
         message,
+        macros: {
+          slots: macros.slotInfo(ids),
+          position: macros.lastPosition(),
+          dragging: macros.isDragging(),
+          automation: {
+            points: macros.automationCount(),
+            recording: macros.isRecording(),
+            enabled: macros.automationEnabled(),
+          },
+          timbre: morph.timbre,
+          timbreManual: macros.timbre(),
+          timbreControlled: morph.timbreControlled,
+          autoReturn: macros.autoReturn(),
+          overrides: macros.overrideList(),
+          control: Object.fromEntries(
+            ids.map((id) => [id, morph.channels[id]?.control]),
+          ),
+          referenced: { ...morph.referenced },
+        },
       };
     },
     play,
@@ -182,6 +237,7 @@ export function createStudio(notify: () => void) {
       stop();
       transport.configure(bpm, beats);
       arrangement.resizeLoop(transport.view(now()).beats);
+      macros.setLoopLength(transport.view(now()).beats);
       feedback("速度或长度变更：播放回到起点；缩短时移除范围外音符。");
     },
     add(kind: Instrument) {
@@ -204,6 +260,7 @@ export function createStudio(notify: () => void) {
           stop();
           arrangement.remove(selected.id);
           syncMixer();
+          macros.prune(arrangement.ids());
         }
       });
     },
@@ -245,15 +302,102 @@ export function createStudio(notify: () => void) {
       notify();
     },
     volume(id: string, n: number) {
+      macros.detach(`vol:${id}`);
       mixer.volume(id, n);
       notify();
     },
     mute(id: string) {
+      macros.detach(`mute:${id}`);
       mixer.mute(id);
       notify();
     },
+    faderRelease(id: string) {
+      if (!macros.autoReturn()) return;
+      macros.reattach(`vol:${id}`);
+      applyMorph(0.08);
+      notify();
+    },
+    reattachTrack(id: string) {
+      macros.reattach(`vol:${id}`);
+      macros.reattach(`mute:${id}`);
+      applyMorph(0.08);
+      feedback("该轨道已回归宏控。");
+    },
     master(n: number) {
       mixer.master(n);
+      notify();
+    },
+    // --- performance macros -------------------------------------------------
+    padDown(x: number, y: number) {
+      macros.setDragging(true);
+      macros.setPosition(x, y);
+      recordMacroPoint();
+      applyMorph(0.02);
+      notify();
+    },
+    padMove(x: number, y: number) {
+      macros.setPosition(x, y);
+      recordMacroPoint();
+      applyMorph(0.02);
+    },
+    padUp() {
+      macros.setDragging(false);
+      // If the automation lane is driving, glide back to its value at the
+      // current beat instead of staying on the drag's exit position.
+      applyMorph(0.08);
+      notify();
+    },
+    captureMacro(slot: number) {
+      guard(() => {
+        macros.capture(slot, mixer.snapshot().channels, macros.lastTimbre());
+        message = `宏 ${SLOT_NAMES[slot]} 已采集 · 当前各轨音量 / 静音与琴键音色`;
+      });
+    },
+    clearMacro(slot: number) {
+      guard(() => {
+        macros.clear(slot);
+        message = `宏 ${SLOT_NAMES[slot]} 已清空`;
+      });
+    },
+    toggleMacroRecord() {
+      const on = !macros.isRecording();
+      macros.setRecording(on);
+      feedback(
+        on
+          ? "演出记录中 · 播放时拖动变形面板，轨迹会写进独立演出轨"
+          : `演出轨已记录 ${macros.automationCount()} 个采样点`,
+      );
+    },
+    setAutomationEnabled(on: boolean) {
+      macros.setAutomationEnabled(on);
+      applyMorph(0.08);
+      feedback(on ? "演出轨回放已开启" : "演出轨回放已关闭，面板完全手动");
+    },
+    clearAutomation() {
+      guard(() => {
+        macros.clearAutomation();
+        message = "演出轨已清空，演奏音符不受影响";
+      });
+    },
+    timbre(n: number) {
+      macros.detach("timbre");
+      macros.setTimbre(n);
+      engine.setTimbre(n);
+      notify();
+    },
+    timbreRelease() {
+      if (!macros.autoReturn()) return;
+      macros.reattach("timbre");
+      applyMorph(0.08);
+      notify();
+    },
+    reattachAll() {
+      macros.reattachAll();
+      applyMorph(0.08);
+      feedback("全部参数已回归宏控。");
+    },
+    setAutoReturn(on: boolean) {
+      macros.setAutoReturn(on);
       notify();
     },
     demo() {
@@ -268,15 +412,19 @@ export function createStudio(notify: () => void) {
           throw new Error("请完成或取消录音后再保存");
         const a = arrangement.snapshot(),
           t = transport.view(now()),
-          m = mixer.snapshot();
+          m = mixer.snapshot(),
+          macroState = macros.serialize();
         saveSession({
-          version: 1,
+          version: 2,
           title: a.title,
           bpm: t.bpm,
           beats: t.beats,
           tracks: a.tracks,
           channels: m.channels,
           master: m.master,
+          macros: macroState.macros,
+          automation: macroState.automation,
+          timbre: macroState.timbre,
         });
         message = "作品已保存到本机浏览器";
       });

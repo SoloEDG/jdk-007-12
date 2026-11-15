@@ -19,6 +19,9 @@ export function createArrangement() {
     snapshot() {
       return { tracks: structuredClone(tracks), selected, title };
     },
+    ids() {
+      return tracks.map((t) => t.id);
+    },
     selected() {
       return tracks.find((t) => t.id === selected)
         ? structuredClone(tracks.find((t) => t.id === selected)!)

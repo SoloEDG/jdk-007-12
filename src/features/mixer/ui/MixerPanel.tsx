@@ -1,21 +1,27 @@
 import type { Track, Channel } from "@/shared/types";
-import { ChannelStrip } from "./ChannelStrip";
+import { ChannelStrip, type MacroState } from "./ChannelStrip";
 export function MixerPanel({
   tracks,
   channels,
   master,
   running,
+  macro,
   volume,
   mute,
   setMaster,
+  reattach,
+  faderRelease,
 }: {
   tracks: readonly Track[];
   channels: Record<string, Channel>;
   master: number;
   running: boolean;
+  macro: Record<string, MacroState>;
   volume: (id: string, n: number) => void;
   mute: (id: string) => void;
   setMaster: (n: number) => void;
+  reattach: (id: string) => void;
+  faderRelease: (id: string) => void;
 }) {
   return (
     <section className="panel mixer-panel">
@@ -35,8 +41,11 @@ export function MixerPanel({
             track={t}
             channel={channels[t.id] ?? { volume: 0.75, muted: false }}
             running={running}
+            macro={macro[t.id] ?? "none"}
             volume={(n) => volume(t.id, n)}
             mute={() => mute(t.id)}
+            reattach={() => reattach(t.id)}
+            faderRelease={() => faderRelease(t.id)}
           />
         ))
       )}

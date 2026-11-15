@@ -5,7 +5,7 @@ export function createMixer() {
   let channels: Record<string, Channel> = {},
     master = 0.75;
   const buses = createBuses();
-  const sync = () => buses.sync(channels, master);
+  const sync = (glide?: number) => buses.sync(channels, master, glide);
   return {
     snapshot() {
       return { channels: structuredClone(channels), master };
@@ -29,7 +29,22 @@ export function createMixer() {
     mute(id: string) {
       if (channels[id])
         channels[id] = { ...channels[id], muted: !channels[id].muted };
-      sync();
+      sync(0.04);
+    },
+    // Macro-driven write: only the listed fields are touched, so parameters
+    // the performer has taken over manually are left alone.
+    setChannel(
+      id: string,
+      patch: { volume?: number; muted?: boolean },
+      glide = 0.03,
+    ) {
+      const current = channels[id];
+      if (!current) return;
+      channels[id] = {
+        volume: patch.volume === undefined ? current.volume : level(patch.volume),
+        muted: patch.muted === undefined ? current.muted : patch.muted,
+      };
+      sync(glide);
     },
     master(value: number) {
       master = level(value);
